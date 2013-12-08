@@ -1,3 +1,18 @@
+/*
+ * Copyright (C) 2013 Peter Gregus for GravityBox Project (C3C076@xda)
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.ceco.gm2.gravitybox;
 
 import android.content.res.Resources;
@@ -10,7 +25,7 @@ import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.XC_MethodHook.Unhook;
 
 public class ModAudioSettings {
-    private static final String TAG = "ModAudioSettings";
+    private static final String TAG = "GB:ModAudioSettings";
     public static final String PACKAGE_NAME = "com.android.settings";
     private static final String CLASS_VOLUME_PREF = "com.mediatek.audioprofile.RingerVolumePreference";
     private static final String CLASS_VOLUMIZER = "com.mediatek.audioprofile.RingerVolumePreference$SeekBarVolumizer";
@@ -27,7 +42,13 @@ public class ModAudioSettings {
     public static void init(final XSharedPreferences prefs, final ClassLoader classLoader) {
         try {
             final Class<?> classVolumePref = XposedHelpers.findClass(CLASS_VOLUME_PREF, classLoader);
-            final Class<?> classVolumizer = XposedHelpers.findClass(CLASS_VOLUMIZER, classLoader);
+            final Class<?> classVolumizer;
+            try {
+                classVolumizer = XposedHelpers.findClass(CLASS_VOLUMIZER, classLoader);
+            } catch (Throwable t) {
+                if (DEBUG) log("classVolumizer doesn't exist, exiting...");
+                return;
+            }
 
             XposedHelpers.findAndHookMethod(classVolumePref, "onBindDialogView", View.class, new XC_MethodHook() {
 
@@ -87,8 +108,8 @@ public class ModAudioSettings {
                             if (DEBUG) log ("mAudioManager setAudioProfileStreamVolume: " + 
                                     param2.args[0] + "," + param2.args[1] + "," + param2.args[2]);
                             if ((Integer)param2.args[0] != streamType) {
-                                log("setVolume: mAudioManager.setAudioProfileStreamVolume: " +
-                                		"Attempt to set volume of foreign Stream Type - ignoring");
+                                if (DEBUG) log("setVolume: mAudioManager.setAudioProfileStreamVolume: " +
+                                        "Attempt to set volume of foreign Stream Type - ignoring");
                                 param2.args[0] = streamType;
                             }
                         }
@@ -122,8 +143,8 @@ public class ModAudioSettings {
                                 @Override
                                 protected void beforeHookedMethod(MethodHookParam param2) throws Throwable {
                                     if ((Integer) param2.args[1] != streamType) {
-                                        log("revertVolume: setStreamVolume: " +
-                                        		"Attempt to set volume of foreign Stream Type - ignoring");
+                                        if (DEBUG) log("revertVolume: setStreamVolume: " +
+                                                "Attempt to set volume of foreign Stream Type - ignoring");
                                         param2.args[1] = streamType;
                                     }
                                 }
@@ -156,8 +177,8 @@ public class ModAudioSettings {
                                 @Override
                                 protected void beforeHookedMethod(MethodHookParam param2) throws Throwable {
                                     if ((Integer) param2.args[1] != streamType) {
-                                        log("saveVolume: setStreamVolume: " +
-                                        		"Attempt to set volume of foreign Stream Type - ignoring");
+                                        if (DEBUG) log("saveVolume: setStreamVolume: " +
+                                                "Attempt to set volume of foreign Stream Type - ignoring");
                                         param2.args[1] = streamType;
                                     }
                                 }
@@ -172,8 +193,8 @@ public class ModAudioSettings {
                     }
                 }
             });
-        } catch (Exception e) {
-            XposedBridge.log(e);
+        } catch (Throwable t) {
+            XposedBridge.log(t);
         }
     }
 }

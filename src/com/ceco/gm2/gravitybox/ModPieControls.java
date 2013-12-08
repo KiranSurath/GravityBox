@@ -1,4 +1,25 @@
+/*
+ * Copyright (C) 2013 The CyanogenMod Project (Jens Doll)
+ * Copyright (C) 2013 Peter Gregus for GravityBox Project (C3C076@xda)
+ * This code is loosely based on portions of the ParanoidAndroid Project source, Copyright (C) 2012.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
 package com.ceco.gm2.gravitybox;
+
+import java.util.HashSet;
+import java.util.Set;
 
 import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
@@ -28,7 +49,7 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 
 public class ModPieControls {
-    private static final String TAG = "ModPieController";
+    private static final String TAG = "GB:ModPieController";
     public static final String PACKAGE_NAME = "com.android.systemui";
     private static final boolean DEBUG = false;
     private static final boolean DEBUG_INPUT = false;
@@ -42,11 +63,10 @@ public class ModPieControls {
     public static final int STATUS_BAR_DISABLE_RECENT = 0x01000000;
     public static final int STATUS_BAR_DISABLE_BACK = 0x00400000;
 
-    public static final String SETTING_PIE_CONTROLS = "pie_controls";
-    public static final String SETTING_PIE_SEARCH = "pie_search";
-    public static final String SETTING_PIE_GRAVITY = "pie_gravity";
-    public static final String SETTING_PIE_SIZE = "pie_size";
-    public static final String SETTING_PIE_TRIGGER_SIZE = "pie_trigger_size";
+    public static final int PIE_DISABLED = 0;
+    public static final int PIE_ENABLED_ALWAYS = 1;
+    public static final int PIE_ENABLED_ED = 2;
+    public static final int PIE_ENABLED_ED_NAVBAR_HIDDEN = 3;
 
     private static PieController mPieController;
     private static PieLayout mPieContainer;
@@ -58,6 +78,10 @@ public class ModPieControls {
     private static PieSettingsObserver mSettingsObserver;
     private static boolean mShowMenuItem;
     private static boolean mAlwaysShowMenuItem;
+    private static int mPieMode;
+    private static int mPieSize;
+    private static int mPieTriggerSize;
+    private static int mExpandedDesktopMode;
 
     private static void log(String message) {
         XposedBridge.log(TAG + ": " + message);
@@ -67,58 +91,86 @@ public class ModPieControls {
 
         @Override
         public void onReceive(Context context, Intent intent) {
-            log("Broadcast received: " + intent.toString());
-            ContentResolver cr = mContext.getContentResolver();
+            if (DEBUG) log("Broadcast received: " + intent.toString());
             if (intent.getAction().equals(GravityBoxSettings.ACTION_PREF_PIE_CHANGED)) {
                 if (intent.hasExtra(GravityBoxSettings.EXTRA_PIE_ENABLE)) {
-                    int enable = intent.getBooleanExtra(
-                            GravityBoxSettings.EXTRA_PIE_ENABLE, false) ? 1 : 0;
-                    Settings.System.putInt(cr, SETTING_PIE_CONTROLS, enable);
+                    mPieMode = intent.getIntExtra(GravityBoxSettings.EXTRA_PIE_ENABLE, 0);
+                    attachPie();
                 }
-                if (intent.hasExtra(GravityBoxSettings.EXTRA_PIE_SEARCH)) {
-                    int search = intent.getBooleanExtra(
-                            GravityBoxSettings.EXTRA_PIE_SEARCH, false) ? 1 : 0;
-                    Settings.System.putInt(cr, SETTING_PIE_SEARCH, search);
+                if (intent.hasExtra(GravityBoxSettings.EXTRA_PIE_CUSTOM_KEY_MODE)) {
+                    mPieController.setCustomKeyMode(intent.getIntExtra(
+                            GravityBoxSettings.EXTRA_PIE_CUSTOM_KEY_MODE,
+                            GravityBoxSettings.PIE_CUSTOM_KEY_OFF));
                 }
                 if (intent.hasExtra(GravityBoxSettings.EXTRA_PIE_TRIGGERS)) {
                     String[] triggers = intent.getStringArrayExtra(
                             GravityBoxSettings.EXTRA_PIE_TRIGGERS);
-                    int tslots = 0;
-                    for (String s : triggers) {
-                        try {
-                            tslots |= Integer.valueOf(s);
-                        } catch (NumberFormatException e) {
-                            XposedBridge.log(e);
-                        }
+                    mPieTriggerSlots = getTriggerSlotsFromArray(triggers);
+                    if (mPieContainer != null) {
+                        mPieContainer.setTriggerSlots(mPieTriggerSlots);
                     }
-                    Settings.System.putInt(cr, SETTING_PIE_GRAVITY, tslots);
+                    attachPie();
                 }
                 if (intent.hasExtra(GravityBoxSettings.EXTRA_PIE_TRIGGER_SIZE)) {
-                    int size = intent.getIntExtra(GravityBoxSettings.EXTRA_PIE_TRIGGER_SIZE, 5);
-                    Settings.System.putInt(cr, SETTING_PIE_TRIGGER_SIZE, size);
+                    mPieTriggerSize = intent.getIntExtra(GravityBoxSettings.EXTRA_PIE_TRIGGER_SIZE, 5);
+                    attachPie();
                 }
                 if (intent.hasExtra(GravityBoxSettings.EXTRA_PIE_SIZE)) {
-                    float size = (float) intent.getIntExtra(
-                            GravityBoxSettings.EXTRA_PIE_SIZE, 1000) / 1000f;
-                    Settings.System.putFloat(cr, SETTING_PIE_SIZE, size);
+                    mPieSize = intent.getIntExtra(GravityBoxSettings.EXTRA_PIE_SIZE, 1000);
+                    if (mPieContainer != null) {
+                        mPieContainer.setPieSize(mPieSize);
+                    }
+                    attachPie();
                 }
                 if (intent.hasExtra(GravityBoxSettings.EXTRA_PIE_HWKEYS_DISABLE)) {
                     mShowMenuItem = intent.getBooleanExtra(
                             GravityBoxSettings.EXTRA_PIE_HWKEYS_DISABLE, false);
-                    if (mPieController != null) {
-                        mPieController.setMenuVisibility(mShowMenuItem | mAlwaysShowMenuItem);
-                    }
+                    mPieController.setMenuVisibility(mShowMenuItem | mAlwaysShowMenuItem);
                 }
                 if (intent.hasExtra(GravityBoxSettings.EXTRA_PIE_MENU)) {
                     mAlwaysShowMenuItem = intent.getBooleanExtra(
                             GravityBoxSettings.EXTRA_PIE_MENU, false);
-                    if (mPieController != null) {
-                        mPieController.setMenuVisibility(mShowMenuItem | mAlwaysShowMenuItem);
-                    }
+                    mPieController.setMenuVisibility(mShowMenuItem | mAlwaysShowMenuItem);
                 }
+                if (intent.hasExtra(GravityBoxSettings.EXTRA_PIE_COLOR_BG)) {
+                    mPieController.setBackgroundColor(intent.getIntExtra(GravityBoxSettings.EXTRA_PIE_COLOR_BG,
+                            mGbContext.getResources().getColor(R.color.pie_background_color)));
+                }
+                if (intent.hasExtra(GravityBoxSettings.EXTRA_PIE_COLOR_FG)) {
+                    mPieController.setForegroundColor(intent.getIntExtra(GravityBoxSettings.EXTRA_PIE_COLOR_FG,
+                            mGbContext.getResources().getColor(R.color.pie_foreground_color)));
+                }
+                if (intent.hasExtra(GravityBoxSettings.EXTRA_PIE_COLOR_OUTLINE)) {
+                    mPieController.setOutlineColor(intent.getIntExtra(GravityBoxSettings.EXTRA_PIE_COLOR_OUTLINE,
+                            mGbContext.getResources().getColor(R.color.pie_outline_color)));
+                }
+                if (intent.hasExtra(GravityBoxSettings.EXTRA_PIE_COLOR_SELECTED)) {
+                    mPieController.setSelectedColor(intent.getIntExtra(GravityBoxSettings.EXTRA_PIE_COLOR_SELECTED,
+                            mGbContext.getResources().getColor(R.color.pie_selected_color)));
+                }
+                if (intent.hasExtra(GravityBoxSettings.EXTRA_PIE_COLOR_TEXT)) {
+                    mPieController.setTextColor(intent.getIntExtra(GravityBoxSettings.EXTRA_PIE_COLOR_TEXT,
+                            mGbContext.getResources().getColor(R.color.pie_text_color)));
+                }
+            } else if (intent.getAction().equals(GravityBoxSettings.ACTION_PREF_EXPANDED_DESKTOP_MODE_CHANGED)) {
+                mExpandedDesktopMode = intent.getIntExtra(
+                        GravityBoxSettings.EXTRA_ED_MODE, GravityBoxSettings.ED_DISABLED);
+                attachPie();
             }
         }
     };
+
+    private static int getTriggerSlotsFromArray(String[] triggers) {
+        int tslots = 0;
+        for (String s : triggers) {
+            try {
+                tslots |= Integer.valueOf(s);
+            } catch (NumberFormatException e) {
+                XposedBridge.log(e);
+            }
+        }
+        return tslots;
+    }
 
     private static View.OnTouchListener mPieTriggerOnTouchHandler = new View.OnTouchListener() {
         @Override
@@ -196,22 +248,52 @@ public class ModPieControls {
             final Class<?> systemUiClass = XposedHelpers.findClass(CLASS_SYSTEM_UI, classLoader);
             final Class<?> phoneStatusBarClass = XposedHelpers.findClass(CLASS_PHONE_STATUSBAR, classLoader);
 
+            mPieMode = PIE_DISABLED;
+            try {
+                mPieMode = Integer.valueOf(prefs.getString(GravityBoxSettings.PREF_KEY_PIE_CONTROL_ENABLE, "0"));
+            } catch (NumberFormatException nfe) {
+                log("Invalid preference value for Pie Mode");
+            }
             mShowMenuItem = prefs.getBoolean(GravityBoxSettings.PREF_KEY_HWKEYS_DISABLE, false);
             mAlwaysShowMenuItem = prefs.getBoolean(GravityBoxSettings.PREF_KEY_PIE_CONTROL_MENU, false);
+            Set<String> triggerSet = prefs.getStringSet(
+                    GravityBoxSettings.PREF_KEY_PIE_CONTROL_TRIGGERS, new HashSet<String>());
+            mPieTriggerSlots = getTriggerSlotsFromArray(triggerSet.toArray(new String[triggerSet.size()]));
+            mPieSize = prefs.getInt(GravityBoxSettings.PREF_KEY_PIE_CONTROL_SIZE, 1000);
+            mPieTriggerSize = prefs.getInt(GravityBoxSettings.PREF_KEY_PIE_CONTROL_TRIGGER_SIZE, 5);
+
+            mExpandedDesktopMode = GravityBoxSettings.ED_DISABLED;
+            try {
+                mExpandedDesktopMode = Integer.valueOf(prefs.getString(
+                        GravityBoxSettings.PREF_KEY_EXPANDED_DESKTOP, "0"));
+            } catch (NumberFormatException nfe) {
+                log("Invalid value for PREF_KEY_EXPANDED_DESKTOP preference");
+            }
 
             XposedHelpers.findAndHookMethod(baseStatusBarClass, "start", new XC_MethodHook() {
 
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                    log("BaseStatusBar starting...");
+                    if (DEBUG) log("BaseStatusBar starting...");
                     mContext = (Context) XposedHelpers.getObjectField(param.thisObject, "mContext");
                     mGbContext = mContext.createPackageContext(GravityBox.PACKAGE_NAME, Context.CONTEXT_IGNORE_SECURITY);
-                    mWindowManager = (WindowManager) XposedHelpers.getObjectField(param.thisObject, "mWindowManager");
-                    mPieController = new PieController(mContext, mGbContext);
+                    mWindowManager = (WindowManager) mContext.getSystemService(Context.WINDOW_SERVICE);
+                    mPieController = new PieController(mContext, mGbContext, prefs);
+
+                    int customKeyMode = GravityBoxSettings.PIE_CUSTOM_KEY_OFF;
+                    try {
+                        customKeyMode = Integer.valueOf(prefs.getString(
+                            GravityBoxSettings.PREF_KEY_PIE_CONTROL_CUSTOM_KEY, "0"));
+                    } catch (NumberFormatException nfe) {
+                        log("Invalid value for PREF_KEY_PIE_CONTROL_CUSTOM_KEY preference");
+                    }
+                    mPieController.setCustomKeyMode(customKeyMode);
+
                     mPieController.attachTo(param.thisObject);
 
                     IntentFilter intentFilter = new IntentFilter();
                     intentFilter.addAction(GravityBoxSettings.ACTION_PREF_PIE_CHANGED);
+                    intentFilter.addAction(GravityBoxSettings.ACTION_PREF_EXPANDED_DESKTOP_MODE_CHANGED);
                     mContext.registerReceiver(mBroadcastReceiver, intentFilter);
 
                     mSettingsObserver = new PieSettingsObserver(new Handler());
@@ -270,8 +352,8 @@ public class ModPieControls {
                             | mAlwaysShowMenuItem);
                 }
             });
-        } catch (Exception e) {
-            XposedBridge.log(e);
+        } catch (Throwable t) {
+            XposedBridge.log(t);
         }
     }
 
@@ -283,36 +365,46 @@ public class ModPieControls {
         void observe() {
             ContentResolver resolver = mContext.getContentResolver();
             resolver.registerContentObserver(Settings.System.getUriFor(
-                    SETTING_PIE_CONTROLS), false, this);
-            resolver.registerContentObserver(Settings.System.getUriFor(
-                    SETTING_PIE_GRAVITY), false, this);
-            resolver.registerContentObserver(Settings.System.getUriFor(
-                    SETTING_PIE_TRIGGER_SIZE), false, this);
+                    ModExpandedDesktop.SETTING_EXPANDED_DESKTOP_STATE), false, this);
         }
 
         @Override
         public void onChange(boolean selfChange) {
-            log("PieSettingsObserver onChange()");
-            mPieTriggerSlots = Settings.System.getInt(mContext.getContentResolver(),
-                    SETTING_PIE_GRAVITY, Position.BOTTOM.FLAG);
+            if (DEBUG) log("PieSettingsObserver onChange()");
 
             attachPie();
         }
     }
 
-    private static boolean isPieEnabled() {
-        int pie = Settings.System.getInt(mContext.getContentResolver(), 
-                SETTING_PIE_CONTROLS, 0);
-        if (DEBUG) log("isPieEnabled: SETTING_PIE_CONTROLS = " + pie);
-        return (pie == 1);
+    public static boolean isPieEnabled(Context context, int pieMode, int expandedDesktopMode) {
+        if (context == null) return false;
+
+        final ContentResolver cr = context.getContentResolver();
+        if (DEBUG) log("isPieEnabled: mPieMode = " + pieMode);
+
+        switch(pieMode) {
+            case PIE_DISABLED: return false;
+            case PIE_ENABLED_ALWAYS: return true;
+            case PIE_ENABLED_ED:
+            case PIE_ENABLED_ED_NAVBAR_HIDDEN:
+                if (DEBUG) log("isPieEnabled: SETTING_EXPANDED_DESKTOP_MODE = " + expandedDesktopMode);
+                final boolean edEnabled = Settings.System.getInt(
+                        cr, ModExpandedDesktop.SETTING_EXPANDED_DESKTOP_STATE, 0) == 1;
+                if (DEBUG) log("isPieEnabled: SETTING_EXPANDED_DESKTOP_STATE = " + edEnabled);
+                return edEnabled && (pieMode == PIE_ENABLED_ED ||
+                        (pieMode == PIE_ENABLED_ED_NAVBAR_HIDDEN 
+                            && (expandedDesktopMode == GravityBoxSettings.ED_NAVBAR ||
+                                    expandedDesktopMode == GravityBoxSettings.ED_BOTH)));
+            default: return false;
+        }
     }
 
     private static void attachPie() {
-        if (isPieEnabled()) {
+        if (isPieEnabled(mContext, mPieMode, mExpandedDesktopMode)) {
 
             // Create our container, if it does not exist already
             if (mPieContainer == null) {
-                mPieContainer = new PieLayout(mContext, mGbContext);
+                mPieContainer = new PieLayout(mContext, mGbContext, mPieTriggerSlots, mPieSize);
                 WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -380,8 +472,7 @@ public class ModPieControls {
         int width = (int) (res.getDisplayMetrics().widthPixels * 0.8f);
         int height = (int) (res.getDisplayMetrics().heightPixels * 0.8f);
         int triggerThickness = (int) TypedValue.applyDimension(
-                TypedValue.COMPLEX_UNIT_DIP, Settings.System.getInt(
-                        mContext.getContentResolver(), SETTING_PIE_TRIGGER_SIZE, 5), 
+                TypedValue.COMPLEX_UNIT_DIP, mPieTriggerSize, 
                         res.getDisplayMetrics());
         if (DEBUG) log("Pie trigger thickness: " + triggerThickness);
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
@@ -406,5 +497,11 @@ public class ModPieControls {
         }
         lp.gravity = position.ANDROID_GRAVITY;
         return lp;
+    }
+
+    public static void onPieSnapped(int positionFlagOrig, int positionFlagNew) {
+        mPieTriggerSlots = mPieTriggerSlots & ~positionFlagOrig | positionFlagNew;
+        mPieContainer.setTriggerSlots(mPieTriggerSlots);
+        attachPie();
     }
 }

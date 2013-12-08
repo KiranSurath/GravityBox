@@ -1,3 +1,18 @@
+/*
+ * Copyright (C) 2013 Peter Gregus for GravityBox Project (C3C076@xda)
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.ceco.gm2.gravitybox;
 
 import android.os.Build;
@@ -18,23 +33,29 @@ public class GravityBox implements IXposedHookZygoteInit, IXposedHookInitPackage
     public void initZygote(StartupParam startupParam) throws Throwable {
         MODULE_PATH = startupParam.modulePath;
         prefs = new XSharedPreferences(PACKAGE_NAME);
+        prefs.makeWorldReadable();
 
-        XposedBridge.log("Hardware: " + Build.HARDWARE);
-        XposedBridge.log("Product: " + Build.PRODUCT);
-        XposedBridge.log("Device manufacturer: " + Build.MANUFACTURER);
-        XposedBridge.log("Device brand: " + Build.BRAND);
-        XposedBridge.log("Device model: " + Build.MODEL);
-        XposedBridge.log("Is MTK device: " + Utils.isMtkDevice());
-        XposedBridge.log("Has Gemini support: " + Utils.hasGeminiSupport());
-        XposedBridge.log("Android SDK: " + Build.VERSION.SDK_INT);
-        XposedBridge.log("Android Release: " + Build.VERSION.RELEASE);
-        XposedBridge.log("ROM: " + Build.DISPLAY);
+        XposedBridge.log("GB:Hardware: " + Build.HARDWARE);
+        XposedBridge.log("GB:Product: " + Build.PRODUCT);
+        XposedBridge.log("GB:Device manufacturer: " + Build.MANUFACTURER);
+        XposedBridge.log("GB:Device brand: " + Build.BRAND);
+        XposedBridge.log("GB:Device model: " + Build.MODEL);
+        XposedBridge.log("GB:Device type: " + (Utils.isTablet() ? "tablet" : "phone"));
+        XposedBridge.log("GB:Is MTK device: " + Utils.isMtkDevice());
+        XposedBridge.log("GB:Is Xperia device: " + Utils.isXperiaDevice());
+        XposedBridge.log("GB:Has telephony support: " + Utils.hasTelephonySupport());
+        XposedBridge.log("GB:Has Gemini support: " + Utils.hasGeminiSupport());
+        XposedBridge.log("GB:Android SDK: " + Build.VERSION.SDK_INT);
+        XposedBridge.log("GB:Android Release: " + Build.VERSION.RELEASE);
+        XposedBridge.log("GB:ROM: " + Build.DISPLAY);
 
         SystemWideResources.initResources(prefs);
 
         // MTK specific
         if (Utils.isMtkDevice()) {
-            ModSignalIconHide.initZygote(prefs);
+            if (Utils.hasGeminiSupport()) {
+                ModSignalIconHide.initZygote(prefs);
+            }
 
             if (prefs.getBoolean(GravityBoxSettings.PREF_KEY_FIX_CALLER_ID_PHONE, false)) {
                 FixCallerIdPhone.initZygote(prefs);
@@ -45,20 +66,31 @@ public class GravityBox implements IXposedHookZygoteInit, IXposedHookInitPackage
             }
         }
 
+        // 4.2+ only
+        if (Build.VERSION.SDK_INT > 16) {
+            FixTraceFlood.initZygote();
+            ModElectronBeam.initZygote(prefs);
+            if (Build.VERSION.SDK_INT < 19) {
+                ModLockscreen.init(prefs, null);
+            }
+        }
+
         // Common
-        FixTraceFlood.initZygote();
         ModVolumeKeySkipTrack.init(prefs);
         ModVolKeyCursor.initZygote(prefs);
-        ModCallCard.initZygote();
-        ModStatusbarColor.initZygote();
-        PhoneWrapper.initZygote();
-        ModElectronBeam.initZygote(prefs);
-        ModLockscreen.initZygote(prefs);
+        ModStatusbarColor.initZygote(prefs);
+        PhoneWrapper.initZygote(prefs);
         ModLowBatteryWarning.initZygote(prefs);
         ModDisplay.initZygote(prefs);
         ModAudio.initZygote(prefs);
         ModHwKeys.initZygote(prefs);
-        PatchMasterKey.initZygote();
+        if (Build.VERSION.SDK_INT < 19) {
+            PatchMasterKey.initZygote();
+            ModCallCard.initZygote();
+            ModPhone.initZygote(prefs);
+        }
+        ModExpandedDesktop.initZygote(prefs);
+        ConnectivityServiceWrapper.initZygote();
     }
 
     @Override
@@ -67,25 +99,37 @@ public class GravityBox implements IXposedHookZygoteInit, IXposedHookInitPackage
         if (resparam.packageName.equals(ModBatteryStyle.PACKAGE_NAME))
             ModBatteryStyle.initResources(prefs, resparam);
 
-        if (resparam.packageName.equals(ModCenterClock.PACKAGE_NAME)) {
-            ModCenterClock.initResources(prefs, resparam);
+        if (resparam.packageName.equals(ModStatusBar.PACKAGE_NAME)) {
+            ModStatusBar.initResources(prefs, resparam);
         }
 
         if (resparam.packageName.equals(FixDevOptions.PACKAGE_NAME)) {
             FixDevOptions.initPackageResources(prefs, resparam);
         }
 
-        if (resparam.packageName.equals(ModQuickSettings.PACKAGE_NAME)) {
+        if (Build.VERSION.SDK_INT > 16 && resparam.packageName.equals(ModQuickSettings.PACKAGE_NAME)) {
             ModQuickSettings.initResources(prefs, resparam);
+        }
+
+        // KitKat
+        if (Build.VERSION.SDK_INT > 18) {
+            if (resparam.packageName.equals(ModLockscreen.PACKAGE_NAME)) {
+                ModLockscreen.initPackageResources(prefs, resparam);
+            }
         }
     }
 
     @Override
     public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
 
+        if (lpparam.packageName.equals(SystemPropertyProvider.PACKAGE_NAME)) {
+            SystemPropertyProvider.init(lpparam.classLoader);
+        }
+
         // MTK Specific
         if (Utils.isMtkDevice()) {
-            if (lpparam.packageName.equals(ModSignalIconHide.PACKAGE_NAME)) {
+            if (Utils.hasGeminiSupport() && !Utils.isMt6572Device() &&
+                    lpparam.packageName.equals(ModSignalIconHide.PACKAGE_NAME)) {
                 ModSignalIconHide.init(prefs, lpparam.classLoader);
             }
 
@@ -126,6 +170,12 @@ public class GravityBox implements IXposedHookZygoteInit, IXposedHookInitPackage
             if (lpparam.packageName.equals(ModCellConnService.PACKAGE_NAME)) {
                 ModCellConnService.init(prefs, lpparam.classLoader);
             }
+
+            if (Build.VERSION.SDK_INT > 16
+                    && Utils.hasGeminiSupport()
+                    && lpparam.packageName.equals(ModMtkToolbar.PACKAGE_NAME)) {
+                ModMtkToolbar.init(prefs, lpparam.classLoader);
+            }
         }
 
         // Common
@@ -141,15 +191,15 @@ public class GravityBox implements IXposedHookZygoteInit, IXposedHookInitPackage
             ModClearAllRecents.init(prefs, lpparam.classLoader);
         }
 
-        if (lpparam.packageName.equals(ModRebootMenu.PACKAGE_NAME)) {
-            ModRebootMenu.init(prefs, lpparam.classLoader);
+        if (lpparam.packageName.equals(ModPowerMenu.PACKAGE_NAME)) {
+            ModPowerMenu.init(prefs, lpparam.classLoader);
         }
 
-        if (lpparam.packageName.equals(ModCallCard.PACKAGE_NAME)) {
+        if (Build.VERSION.SDK_INT < 19 && lpparam.packageName.equals(ModCallCard.PACKAGE_NAME)) {
             ModCallCard.init(prefs, lpparam.classLoader);
         }
 
-        if (lpparam.packageName.equals(ModQuickSettings.PACKAGE_NAME)) {
+        if (Build.VERSION.SDK_INT > 16 && lpparam.packageName.equals(ModQuickSettings.PACKAGE_NAME)) {
             ModQuickSettings.init(prefs, lpparam.classLoader);
         }
 
@@ -157,11 +207,12 @@ public class GravityBox implements IXposedHookZygoteInit, IXposedHookInitPackage
             ModStatusbarColor.init(prefs, lpparam.classLoader);
         }
 
-        if (lpparam.packageName.equals(ModCenterClock.PACKAGE_NAME)) {
-            ModCenterClock.init(prefs, lpparam.classLoader);
+        if (lpparam.packageName.equals(ModStatusBar.PACKAGE_NAME)) {
+            ModStatusBar.init(prefs, lpparam.classLoader);
         }
 
-        if (lpparam.packageName.equals(ModPhone.PACKAGE_NAME)) {
+        if (Build.VERSION.SDK_INT < 19 && lpparam.packageName.equals(ModPhone.PACKAGE_NAME) &&
+                Utils.hasTelephonySupport()) {
             ModPhone.init(prefs, lpparam.classLoader);
         }
 
@@ -175,6 +226,22 @@ public class GravityBox implements IXposedHookZygoteInit, IXposedHookInitPackage
 
         if (lpparam.packageName.equals(ModPieControls.PACKAGE_NAME)) {
             ModPieControls.init(prefs, lpparam.classLoader);
+        }
+
+        if (lpparam.packageName.equals(ModNavigationBar.PACKAGE_NAME)
+                && prefs.getBoolean(GravityBoxSettings.PREF_KEY_NAVBAR_OVERRIDE, false)) {
+            ModNavigationBar.init(prefs, lpparam.classLoader);
+        }
+
+        if (Build.VERSION.SDK_INT < 19 && lpparam.packageName.equals(ModMms.PACKAGE_NAME)) {
+            ModMms.init(prefs, lpparam.classLoader);
+        }
+
+        // KitKat
+        if (Build.VERSION.SDK_INT > 18) {
+            if (lpparam.packageName.equals(ModLockscreen.PACKAGE_NAME)) {
+                ModLockscreen.init(prefs, lpparam.classLoader);
+            }
         }
     }
 }

@@ -1,9 +1,28 @@
+/*
+ * Copyright (C) 2013 Peter Gregus for GravityBox Project (C3C076@xda)
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.ceco.gm2.gravitybox.quicksettings;
 
+import com.ceco.gm2.gravitybox.ModHwKeys;
 import com.ceco.gm2.gravitybox.R;
 
 import de.robv.android.xposed.XposedBridge;
 import android.content.Context;
+import android.content.Intent;
+import android.graphics.PorterDuff;
+import android.graphics.drawable.Drawable;
 import android.os.PowerManager;
 import android.os.SystemClock;
 import android.view.LayoutInflater;
@@ -27,6 +46,17 @@ public class SleepTile extends AQuickSettingsTile {
                 }
             }
         };
+
+        mOnLongClick = new View.OnLongClickListener() {
+
+            @Override
+            public boolean onLongClick(View v) {
+                Intent intent = new Intent(ModHwKeys.ACTION_SHOW_POWER_MENU);
+                mContext.sendBroadcast(intent);
+                collapsePanels();
+                return true;
+            }
+        };
     }
 
     @Override
@@ -42,7 +72,13 @@ public class SleepTile extends AQuickSettingsTile {
     protected void updateTile() {
         TextView tv = (TextView) mTile.findViewById(R.id.sleep_tileview);
         tv.setText(mLabel);
-        tv.setCompoundDrawablesWithIntrinsicBounds(0, mDrawableId, 0, 0);
+        if (mTileStyle == KITKAT) {
+            Drawable d = mGbResources.getDrawable(mDrawableId).mutate();
+            d.setColorFilter(KK_COLOR_ON, PorterDuff.Mode.SRC_ATOP);
+            tv.setCompoundDrawablesWithIntrinsicBounds(null, d, null, null);
+        } else {
+            tv.setCompoundDrawablesWithIntrinsicBounds(0, mDrawableId, 0, 0);
+        }
     }
 
 }

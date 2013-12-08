@@ -1,7 +1,24 @@
+/*
+ * Copyright (C) 2013 AOKP Project
+ * Copyright (C) 2013 Peter Gregus for GravityBox Project (C3C076@xda)
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.ceco.gm2.gravitybox;
 
 import java.util.List;
 
+import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.XposedBridge;
 
 import android.animation.Animator;
@@ -14,25 +31,22 @@ import android.app.ActivityManager;
 import android.app.KeyguardManager;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
-import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
-import android.database.ContentObserver;
+import android.graphics.drawable.Drawable;
 import android.os.Handler;
-import android.provider.Settings;
 import android.view.View;
 
-public class TransparencyManager {
-    public static final String SETTING_STATUS_BAR_ALPHA_CONFIG_LAUNCHER = "status_bar_alpha_config_launcher";
-    public static final String SETTING_STATUS_BAR_ALPHA_CONFIG_LOCKSCREEN = "status_bar_alpha_config_lockscreen";
-    public static final String SETTING_NAVIGATION_BAR_ALPHA_CONFIG_LAUNCHER = "navigation_bar_alpha_config_launcher";
-    public static final String SETTING_NAVIGATION_BAR_ALPHA_CONFIG_LOCKSCREEN = "navigation_bar_alpha_config_lockscreen";
-    
-    public static final float KEYGUARD_ALPHA = 0.44f;
+public class TransparencyManager implements BroadcastSubReceiver {
+    private static final String TAG = "GB:TransparencyManager";
+    private static final boolean DEBUG = false;
 
-    private static final String TAG = "TransparencyManager";
+    public static final int MODE_DISABLED = 0;
+    public static final int MODE_STATUSBAR = 1;
+    public static final int MODE_NAVBAR = 2;
+    public static final int MODE_FULL = 3;
 
     Object mNavbar;
     Object mStatusbar;
@@ -50,6 +64,8 @@ public class TransparencyManager {
     KeyguardManager km;
     ActivityManager am;
 
+    int mMode = MODE_DISABLED;
+
     private static void log(String message) {
         XposedBridge.log(TAG + ": " + message);
     }
@@ -59,7 +75,6 @@ public class TransparencyManager {
         int color;
         float keyguardAlpha;
         float homeAlpha;
-        boolean tempDisable;
     }
 
     private final Runnable updateTransparencyRunnable = new Runnable() {
@@ -69,8 +84,9 @@ public class TransparencyManager {
         }
     };
 
-    public TransparencyManager(Context context) {
+    public TransparencyManager(Context context, int mode) {
         mContext = context;
+        mMode = mode;
 
         km = (KeyguardManager) mContext.getSystemService(Context.KEYGUARD_SERVICE);
         am = (ActivityManager) mContext.getSystemService(Context.ACTIVITY_SERVICE);
@@ -84,14 +100,40 @@ public class TransparencyManager {
                 update();
             }
         }, intentFilter);
+    }
 
-        SettingsObserver settingsObserver = new SettingsObserver(mHandler);
-        settingsObserver.observe();
+    public static boolean isStatusbarEnabled(int mode) {
+        return ((mode & MODE_STATUSBAR) != 0);
+    }
+
+    public boolean isStatusbarEnabled() {
+        return isStatusbarEnabled(mMode);
+    }
+
+    public static boolean isNavbarEnabled(int mode) {
+        return ((mode & MODE_NAVBAR) != 0);
+    }
+
+    public boolean isNavbarEnabled() {
+        return isNavbarEnabled(mMode);
+    }
+
+    private void update(boolean force) {
+        mHandler.removeCallbacks(updateTransparencyRunnable);
+        if (force || 
+                (isStatusbarEnabled() && 
+                        (mStatusbarInfo.homeAlpha != 1 || 
+                         mStatusbarInfo.keyguardAlpha != 1 )) ||
+                (isNavbarEnabled() &&
+                        (mNavbarInfo.homeAlpha != 1 ||
+                         mNavbarInfo.keyguardAlpha != 1))) {
+            if (DEBUG) log("Updating transparency");
+            mHandler.postDelayed(updateTransparencyRunnable, 100);
+        }
     }
 
     public void update() {
-        mHandler.removeCallbacks(updateTransparencyRunnable);
-        mHandler.postDelayed(updateTransparencyRunnable, 100);
+        update(false);
     }
 
     public void setNavbar(Object n) {
@@ -102,14 +144,6 @@ public class TransparencyManager {
         mStatusbar = s;
     }
 
-    public void setTempDisableStatusbarState(boolean state) {
-        mStatusbarInfo.tempDisable = state;
-    }
-
-    public void setTempNavbarState(boolean state) {
-        mNavbarInfo.tempDisable = state;
-    }
-
     private ValueAnimator createAnimation(final SomeInfo info, View v) {
         if (info.anim != null) {
             info.anim.cancel();
@@ -118,9 +152,7 @@ public class TransparencyManager {
 
         float a = 1;
 
-        if (info.tempDisable) {
-            info.tempDisable = false;
-        } else if (mIsKeyguardShowing) {
+        if (mIsKeyguardShowing) {
             a = info.keyguardAlpha;
         } else if (mIsHomeShowing) {
             a = info.homeAlpha;
@@ -142,7 +174,10 @@ public class TransparencyManager {
             });
         } else {
             // custom image is set by the theme, let's just apply the alpha if we can.
-            v.getBackground().setAlpha(BackgroundAlphaColorDrawable.floatAlphaToInt(alpha));
+            Drawable bg = v.getBackground();
+            if (bg != null) {
+                bg.setAlpha(BackgroundAlphaColorDrawable.floatAlphaToInt(alpha));
+            }
             return null;
         }
         anim.addListener(new AnimatorListener() {
@@ -170,20 +205,23 @@ public class TransparencyManager {
         mIsHomeShowing = isLauncherShowing();
 
         ValueAnimator navAnim = null, sbAnim = null;
-        if (mNavbar != null) {
+        if ((mMode & MODE_NAVBAR) != 0 && mNavbar != null) {
             navAnim = createAnimation(mNavbarInfo, (View)mNavbar);
         }
-        if (mStatusbar != null) {
+        if ((mMode & MODE_STATUSBAR) != 0 && mStatusbar != null) {
             sbAnim = createAnimation(mStatusbarInfo, (View)mStatusbar);
         }
         if (navAnim != null && sbAnim != null) {
+            if (DEBUG) log("Updating transparency for statusbar & navbar");
             AnimatorSet set = new AnimatorSet();
             set.playTogether(navAnim, sbAnim);
             set.start();
         } else {
             if(navAnim != null) {
+                if (DEBUG) log("Updating transparency for navbar");
                 navAnim.start();
             } else if(sbAnim != null) {
+                if (DEBUG) log("Updating transparency for statusbar");
                 sbAnim.start();
             }
         }
@@ -224,53 +262,46 @@ public class TransparencyManager {
                 && homeInfo.packageName.equals(component.getPackageName())
                 && homeInfo.name.equals(component.getClassName());
     }
+    
+    public void initPreferences(XSharedPreferences prefs) {
+        int value;
 
-    class SettingsObserver extends ContentObserver {
-        SettingsObserver(Handler handler) {
-            super(handler);
-        }
-
-        void observe() {
-            ContentResolver resolver = mContext.getContentResolver();
-
-            resolver.registerContentObserver(
-                    Settings.System.getUriFor(SETTING_NAVIGATION_BAR_ALPHA_CONFIG_LAUNCHER), false,
-                    this);
-            resolver.registerContentObserver(
-                    Settings.System.getUriFor(SETTING_NAVIGATION_BAR_ALPHA_CONFIG_LOCKSCREEN), false,
-                    this);
-            resolver.registerContentObserver(
-                    Settings.System.getUriFor(SETTING_STATUS_BAR_ALPHA_CONFIG_LAUNCHER), false,
-                    this);
-            resolver.registerContentObserver(
-                    Settings.System.getUriFor(SETTING_STATUS_BAR_ALPHA_CONFIG_LOCKSCREEN), false,
-                    this);
-            updateSettings();
-        }
-
-        @Override
-        public void onChange(boolean selfChange) {
-            updateSettings();
-        }
-    }
-
-    protected void updateSettings() {
-        ContentResolver resolver = mContext.getContentResolver();
-        float value;
-
-        value = Settings.System.getInt(resolver, SETTING_STATUS_BAR_ALPHA_CONFIG_LAUNCHER, 0);
+        value = prefs.getInt(GravityBoxSettings.PREF_KEY_TM_STATUSBAR_LAUNCHER, 0);
         mStatusbarInfo.homeAlpha = 1 - (value / 100f);
 
-        value = Settings.System.getInt(resolver, SETTING_STATUS_BAR_ALPHA_CONFIG_LOCKSCREEN, 0);
+        value = prefs.getInt(GravityBoxSettings.PREF_KEY_TM_STATUSBAR_LOCKSCREEN, 0);
         mStatusbarInfo.keyguardAlpha = 1 - (value / 100f);
 
-        value = Settings.System.getInt(resolver, SETTING_NAVIGATION_BAR_ALPHA_CONFIG_LAUNCHER, 0);
+        value = prefs.getInt(GravityBoxSettings.PREF_KEY_TM_NAVBAR_LAUNCHER, 0);
         mNavbarInfo.homeAlpha = 1 - (value / 100f);
 
-        value = Settings.System.getInt(resolver, SETTING_NAVIGATION_BAR_ALPHA_CONFIG_LOCKSCREEN, 0);
+        value = prefs.getInt(GravityBoxSettings.PREF_KEY_TM_NAVBAR_LOCKSCREEN, 0);
         mNavbarInfo.keyguardAlpha = 1 - (value / 100f);
+    }
 
-        update();
+    @Override
+    public void onBroadcastReceived(Context context, Intent intent) {
+        if (intent.getAction().equals(GravityBoxSettings.ACTION_PREF_STATUSBAR_COLOR_CHANGED)) {
+            int value;
+            if (intent.hasExtra(GravityBoxSettings.EXTRA_TM_SB_LAUNCHER)) {
+                value = intent.getIntExtra(GravityBoxSettings.EXTRA_TM_SB_LAUNCHER, 0);
+                mStatusbarInfo.homeAlpha = 1 - (value / 100f);
+            }
+            if (intent.hasExtra(GravityBoxSettings.EXTRA_TM_SB_LOCKSCREEN)) {
+                value = intent.getIntExtra(GravityBoxSettings.EXTRA_TM_SB_LOCKSCREEN, 0);
+                mStatusbarInfo.keyguardAlpha = 1 - (value / 100f);
+            }
+            if (intent.hasExtra(GravityBoxSettings.EXTRA_TM_NB_LAUNCHER)) {
+                value = intent.getIntExtra(GravityBoxSettings.EXTRA_TM_NB_LAUNCHER, 0);
+                mNavbarInfo.homeAlpha = 1 - (value / 100f);
+            }
+            if (intent.hasExtra(GravityBoxSettings.EXTRA_TM_NB_LOCKSCREEN)) {
+                value = intent.getIntExtra(GravityBoxSettings.EXTRA_TM_NB_LOCKSCREEN, 0);
+                mNavbarInfo.keyguardAlpha = 1 - (value / 100f);
+            }
+
+            update(true);
+        }
     }
 }
 

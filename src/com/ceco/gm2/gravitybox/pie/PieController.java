@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2013 The CyanogenMod Project (Jens Doll)
- * Copyright (C) 2013 GravityBox project (C3C076@xda)
+ * Copyright (C) 2013 Peter Gregus for GravityBox project (C3C076@xda)
  * This code is loosely based on portions of the ParanoidAndroid Project source, Copyright (C) 2012.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
@@ -24,14 +24,13 @@ import android.app.ActivityOptions;
 import android.app.SearchManager;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
-import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.content.res.Resources;
-import android.database.ContentObserver;
 import android.graphics.Point;
+import android.graphics.PorterDuff.Mode;
 import android.graphics.drawable.Drawable;
 import android.hardware.input.InputManager;
 import android.os.BatteryManager;
@@ -51,7 +50,9 @@ import android.view.View;
 import android.view.ViewGroup.LayoutParams;
 import android.widget.ImageView;
 
+import com.ceco.gm2.gravitybox.AppLauncher;
 import com.ceco.gm2.gravitybox.GravityBox;
+import com.ceco.gm2.gravitybox.GravityBoxSettings;
 import com.ceco.gm2.gravitybox.ModPieControls;
 import com.ceco.gm2.gravitybox.R;
 import com.ceco.gm2.gravitybox.pie.PieItem;
@@ -61,6 +62,7 @@ import com.ceco.gm2.gravitybox.pie.PieLayout.PieSlice;
 import com.ceco.gm2.gravitybox.pie.PieSliceContainer;
 import com.ceco.gm2.gravitybox.pie.PieSysInfo;
 
+import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.XposedHelpers.ClassNotFoundError;
@@ -73,7 +75,7 @@ import de.robv.android.xposed.XposedHelpers.ClassNotFoundError;
  */
 public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnClickListener {
     public static final String PACKAGE_NAME = "com.android.systemui";
-    public static final String TAG = "PieController";
+    public static final String TAG = "GB:PieController";
     private static final String CLASS_BASE_STATUSBAR = "com.android.systemui.statusbar.BaseStatusBar";
     public static final boolean DEBUG = false;
 
@@ -82,7 +84,8 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
         HOME,
         RECENT,
         MENU,
-        SEARCH
+        SEARCH,
+        APP_LAUNCHER
     };
 
     public static final float EMPTY_ANGLE = 10;
@@ -94,6 +97,7 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
     private Context mGbContext;
     private Resources mGbResources;
     private PieLayout mPieContainer;
+    private AppLauncher mAppLauncher;
     /**
      * This is only needed for #toggleRecentApps()
      */
@@ -113,6 +117,7 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
     private int mNavigationIconHints = 0;
     private int mDisabledFlags = 0;
     private boolean mShowMenu = false;
+    private int mCustomKeyMode = GravityBoxSettings.PIE_CUSTOM_KEY_OFF;
     private Drawable mBackIcon;
     private Drawable mBackAltIcon;
 
@@ -190,7 +195,7 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
                     if (x < gracePeriod) {
                         initialY = y;
                     }
-                    if (initialY - y < sDistance && y - initialY < sDistance) {
+                    if (initialY - y < (sDistance*3) && y - initialY < (sDistance*3)) {
                         if (x - initialX <= sDistance) {
                             return false;
                         }
@@ -198,7 +203,7 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
                     }
                     break;
                 case BOTTOM:
-                    if (initialX - x < sDistance && x - initialX < sDistance) {
+                    if (initialX - x < (sDistance*3) && x - initialX < (sDistance*3)) {
                         if (initialY - y <= sDistance) {
                             return false;
                         }
@@ -206,7 +211,7 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
                     }
                     break;
                 case TOP:
-                    if (initialX - x < sDistance && x - initialX < sDistance) {
+                    if (initialX - x < (sDistance*3) && x - initialX < (sDistance*3)) {
                         if (y - initialY <= sDistance) {
                             return false;
                         }
@@ -217,7 +222,7 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
                     if (x > gracePeriod) {
                         initialY = y;
                     }
-                    if (initialY - y < sDistance && y - initialY < sDistance) {
+                    if (initialY - y < (sDistance*3) && y - initialY < (sDistance*3)) {
                         if (initialX - x <= sDistance) {
                             return false;
                         }
@@ -261,25 +266,6 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
         mHandler.sendMessageDelayed(Message.obtain(mHandler, MSG_INJECT_KEY, keycode, 0), 50);
     }
 
-    private final class SettingsObserver extends ContentObserver {
-        SettingsObserver(Handler handler) {
-            super(handler);
-        }
-
-        void observe() {
-            ContentResolver resolver = mContext.getContentResolver();
-            resolver.registerContentObserver(Settings.System.getUriFor(
-                    ModPieControls.SETTING_PIE_SEARCH), false, this);
-        }
-
-        @Override
-        public void onChange(boolean selfChange) {
-            setupNavigationItems();
-        }
-    }
-
-    private SettingsObserver mSettingsObserver = new SettingsObserver(mHandler);
-
     private BroadcastReceiver mBatteryReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -296,7 +282,16 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
         }
     };
 
-    public PieController(Context context, Context gbContext) {
+    final class ColorInfo {
+        int bgColor;
+        int fgColor;
+        int selectedColor;
+        int outlineColor;
+        int textColor;
+    }
+    private ColorInfo mColorInfo;
+
+    public PieController(Context context, Context gbContext, XSharedPreferences prefs) {
         mContext = context;
         mGbContext = gbContext;
         mGbResources = gbContext.getResources();
@@ -319,6 +314,20 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
         } catch (ClassNotFoundError e) {
             XposedBridge.log(e);
         }
+
+        mColorInfo = new ColorInfo();
+        mColorInfo.bgColor = prefs.getInt(GravityBoxSettings.PREF_KEY_PIE_COLOR_BG, 
+                mGbResources.getColor(R.color.pie_background_color));
+        mColorInfo.selectedColor = prefs.getInt(GravityBoxSettings.PREF_KEY_PIE_COLOR_SELECTED,
+                mGbResources.getColor(R.color.pie_selected_color));
+        mColorInfo.outlineColor = prefs.getInt(GravityBoxSettings.PREF_KEY_PIE_COLOR_OUTLINE,
+                mGbResources.getColor(R.color.pie_outline_color));
+        mColorInfo.fgColor = prefs.getInt(GravityBoxSettings.PREF_KEY_PIE_COLOR_FG,
+                mGbResources.getColor(R.color.pie_foreground_color));
+        mColorInfo.textColor = prefs.getInt(GravityBoxSettings.PREF_KEY_PIE_COLOR_TEXT,
+                mGbResources.getColor(R.color.pie_text_color));
+
+        updateColors();
     }
 
     public void attachTo(Object statusBar) {
@@ -353,7 +362,6 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
         mPieContainer.addSlice(mSysInfo);
 
         // start listening for changes
-        mSettingsObserver.observe();
         mContext.registerReceiver(mBatteryReceiver,
                 new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
 
@@ -365,6 +373,8 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
     }
 
     private void setupNavigationItems() {
+        if (mNavigationSlice == null) return;
+
         Resources res = mContext.getResources();
         int minimumImageSize = (int)mGbResources.getDimension(R.dimen.pie_item_size);
 
@@ -378,10 +388,12 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
         mNavigationSlice.addItem(constructItem(2, ButtonType.RECENT,
                 res.getDrawable(res.getIdentifier("ic_sysbar_recent", "drawable", PACKAGE_NAME)),
                 minimumImageSize));
-        if (Settings.System.getInt(mContext.getContentResolver(),
-                ModPieControls.SETTING_PIE_SEARCH, 0) == 1) {
+        if (mCustomKeyMode == GravityBoxSettings.PIE_CUSTOM_KEY_SEARCH) {
             mNavigationSlice.addItem(constructItem(1, ButtonType.SEARCH,
                     mGbResources.getDrawable(R.drawable.ic_sysbar_search_side), minimumImageSize));
+        } else if (mCustomKeyMode == GravityBoxSettings.PIE_CUSTOM_KEY_APP_LAUNCHER) {
+            mNavigationSlice.addItem(constructItem(1, ButtonType.APP_LAUNCHER,
+                    mGbResources.getDrawable(R.drawable.ic_sysbar_apps), minimumImageSize));
         }
 
         mMenuButton = constructItem(1, ButtonType.MENU,
@@ -400,7 +412,7 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
         view.setMinimumHeight(minimumImageSize);
         LayoutParams lp = new LayoutParams(minimumImageSize, minimumImageSize);
         view.setLayoutParams(lp);
-        PieItem item = new PieItem(mContext, mGbContext, mPieContainer, 0, width, type, view);
+        PieItem item = new PieItem(mContext, mGbContext, mPieContainer, 0, width, type, view, mColorInfo);
         item.setOnClickListener(this);
         return item;
     }
@@ -493,6 +505,8 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
         if (item != null) item.show(!disableRecent);
         item = findItem(ButtonType.SEARCH);
         if (item != null) item.show(!disableRecent && !disableSearch);
+        item = findItem(ButtonType.APP_LAUNCHER);
+        if (item != null) item.show(!disableRecent);
         setMenuVisibility(mShowMenu);
     }
 
@@ -504,6 +518,11 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
         }
 
         mShowMenu = showMenu;
+    }
+
+    public void setCustomKeyMode(int mode) {
+        mCustomKeyMode = mode;
+        setupNavigationItems();
     }
 
     @Override
@@ -518,13 +537,7 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
             log("onSnap from " + position.name());
         }
 
-        int triggerSlots = Settings.System.getInt(mContext.getContentResolver(),
-                ModPieControls.SETTING_PIE_GRAVITY, Position.BOTTOM.FLAG);
-
-        triggerSlots = triggerSlots & ~mPosition.FLAG | position.FLAG;
-
-        Settings.System.putInt(mContext.getContentResolver(),
-                ModPieControls.SETTING_PIE_GRAVITY, triggerSlots);
+        ModPieControls.onPieSnapped(mPosition.FLAG, position.FLAG);
     }
 
     @Override
@@ -566,6 +579,9 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
             case SEARCH:
                 launchAssistAction();
                 break;
+            case APP_LAUNCHER:
+                showAppLauncher();
+                break;
         }
     }
 
@@ -601,6 +617,21 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
         }
     }
 
+    private void showAppLauncher() {
+        if (mAppLauncher == null) {
+            try {
+                mAppLauncher = new AppLauncher(mContext, 
+                        new XSharedPreferences(GravityBox.PACKAGE_NAME));
+            } catch (Throwable t) {
+                log ("Error creating app launcher: " + t.getMessage());
+            }
+        }
+
+        if (mAppLauncher != null) {
+            mAppLauncher.showDialog();
+        }
+    }
+
     public boolean isShowing() {
         return mPieContainer != null && mPieContainer.isShowing();
     }
@@ -629,5 +660,57 @@ public class PieController implements PieLayout.OnSnapListener, PieItem.PieOnCli
             return mGbResources.getString(R.string.pie_battery_status_charging, mBatteryLevel);
         }
         return mGbResources.getString(R.string.pie_battery_status_discharging, mBatteryLevel);
+    }
+
+    public ColorInfo getColorInfo() {
+        return mColorInfo;
+    }
+
+    public void setBackgroundColor(int color) {
+        mColorInfo.bgColor = color;
+        updateColors();
+    }
+
+    public void setForegroundColor(int color) {
+        mColorInfo.fgColor = color;
+        updateColors();
+
+    }
+
+    public void setSelectedColor(int color) {
+        mColorInfo.selectedColor = color;
+        updateColors();
+    }
+
+    public void setOutlineColor(int color) {
+        mColorInfo.outlineColor = color;
+        updateColors();
+    }
+
+    public void setTextColor(int color) {
+        mColorInfo.textColor = color;
+        updateColors();
+    }
+
+    private void updateColors() {
+        if (mBackIcon != null) {
+            mBackIcon.setColorFilter(null);
+            mBackIcon.setColorFilter(mColorInfo.fgColor, Mode.SRC_ATOP);
+        }
+
+        if (mBackAltIcon != null) {
+            mBackAltIcon.setColorFilter(null);
+            mBackAltIcon.setColorFilter(mColorInfo.fgColor, Mode.SRC_ATOP);
+        }
+
+        if (mNavigationSlice != null) {
+            for (PieItem pi : mNavigationSlice.getItems()) {
+                pi.setColor(mColorInfo);
+            }
+        }
+
+        if (mSysInfo != null) {
+            mSysInfo.setColor(mColorInfo);
+        }
     }
 }

@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2013 The CyanogenMod Project
  * This code is loosely based on portions of the ParanoidAndroid Project source, Copyright (C) 2012.
- * Copyright (C) 2013 GravityBox project (C3C076@xda)
+ * Copyright (C) 2013 Peter Gregus for GravityBox project (C3C076@xda)
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -77,15 +77,13 @@ public class PieSysInfo extends PieSliceContainer implements ValueAnimator.Anima
         mContext = context;
         mGbResources = gbContext.getResources();
 
-        int textColor = mGbResources.getColor(R.color.pie_text_color);
-
-        mClockPaint.setColor(textColor);
         mClockPaint.setAntiAlias(true);
         mClockPaint.setTypeface(Typeface.create("sans-serif-light", Typeface.BOLD));
 
-        mInfoPaint.setColor(textColor);
         mInfoPaint.setAntiAlias(true);
         mInfoPaint.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
+
+        setColor(controller.getColorInfo());
     }
 
     @Override
@@ -183,15 +181,19 @@ public class PieSysInfo extends PieSliceContainer implements ValueAnimator.Anima
         if (wifiManager != null) {
             final WifiInfo connectionInfo = wifiManager.getConnectionInfo();
             if (connectionInfo != null) {
-                final Object wifiSsid = XposedHelpers.callMethod(connectionInfo, "getWifiSsid");
+                final Object wifiSsid = Build.VERSION.SDK_INT > 16 ?
+                        XposedHelpers.callMethod(connectionInfo, "getWifiSsid") :
+                        XposedHelpers.callMethod(connectionInfo, "getSSID");
                 if (wifiSsid != null) {
                     ssid = wifiSsid.toString();
                 }
             }
         }
         if (TextUtils.isEmpty(ssid)) {
-            ssid = mContext.getString(mContext.getResources().getIdentifier(
-                    "quick_settings_wifi_not_connected", "string", PieController.PACKAGE_NAME));
+            int resId = mContext.getResources().getIdentifier(
+                    "quick_settings_wifi_not_connected", "string", PieController.PACKAGE_NAME);
+            // TODO: translate
+            ssid = resId == 0 ? "Not connected" : mContext.getString(resId);
         }
         return ssid;
     }
@@ -240,5 +242,10 @@ public class PieSysInfo extends PieSliceContainer implements ValueAnimator.Anima
         mTimeFormatString = format;
         mTimeFormat = new SimpleDateFormat(formatBuilder.toString().trim());
         return mTimeFormat;
+    }
+
+    public void setColor(PieController.ColorInfo colorInfo) {
+        mClockPaint.setColor(colorInfo.textColor);
+        mInfoPaint.setColor(colorInfo.textColor);
     }
 }

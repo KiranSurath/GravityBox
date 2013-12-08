@@ -1,18 +1,38 @@
+/*
+ * Copyright (C) 2013 Peter Gregus for GravityBox Project (C3C076@xda)
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.ceco.gm2.gravitybox.preference;
 
 import com.ceco.gm2.gravitybox.R;
 
 import android.content.Context;
 import android.content.res.TypedArray;
+import android.os.Handler;
 import android.preference.Preference;
 import android.util.AttributeSet;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageButton;
 import android.widget.SeekBar;
 import android.widget.SeekBar.OnSeekBarChangeListener;
 import android.widget.TextView;
 
-public class SeekBarPreference extends Preference implements OnSeekBarChangeListener {
+public class SeekBarPreference extends Preference 
+                               implements OnSeekBarChangeListener, View.OnClickListener {
+
+    private static final int RAPID_PRESS_TIMEOUT = 600;
 
     private int mMinimum = 0;
     private int mMaximum = 100;
@@ -23,9 +43,22 @@ public class SeekBarPreference extends Preference implements OnSeekBarChangeList
 
     private TextView mMonitorBox;
     private SeekBar mBar;
+    private ImageButton mBtnPlus;
+    private ImageButton mBtnMinus;
 
     private int mValue;
+    private int mTmpValue;
     private boolean mTracking = false;
+    private boolean mRapidlyPressing = false;
+    private Handler mHandler;
+
+    private Runnable mRapidPressTimeout = new Runnable() {
+        @Override
+        public void run() {
+            mRapidlyPressing = false;
+            setValue(mTmpValue);
+        }
+    };
 
     public SeekBarPreference(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -38,6 +71,8 @@ public class SeekBarPreference extends Preference implements OnSeekBarChangeList
             mMonitorBoxEnabled = attrs.getAttributeBooleanValue(null, "monitorBoxEnabled", false);
             mMonitorBoxUnit = attrs.getAttributeValue(null, "monitorBoxUnit");
         }
+
+        mHandler = new Handler();
     }
 
     @Override
@@ -51,6 +86,10 @@ public class SeekBarPreference extends Preference implements OnSeekBarChangeList
         mBar.setMax(mMaximum - mMinimum);
         mBar.setOnSeekBarChangeListener(this);
         mBar.setProgress(mValue - mMinimum);
+        mBtnPlus = (ImageButton) layout.findViewById(R.id.btnPlus);
+        mBtnPlus.setOnClickListener(this);
+        mBtnMinus = (ImageButton) layout.findViewById(R.id.btnMinus);
+        mBtnMinus.setOnClickListener(this);
         setMonitorBoxText();
         return layout;
     }
@@ -75,6 +114,10 @@ public class SeekBarPreference extends Preference implements OnSeekBarChangeList
         } else {
             setValue(progress);
         }
+    }
+
+    public void setMinimum(int minimum) {
+        mMinimum = minimum >= mMaximum ? mMaximum - 1 : minimum;
     }
 
     private void setValue(int progress){
@@ -108,5 +151,25 @@ public class SeekBarPreference extends Preference implements OnSeekBarChangeList
     public void onStopTrackingTouch(SeekBar seekBar) {
         mTracking = false;
         onProgressChanged(seekBar, seekBar.getProgress(), true);
+    }
+
+    @Override
+    public void onClick(View v) {
+        if (mRapidlyPressing) {
+            mHandler.removeCallbacks(mRapidPressTimeout);
+        } else {
+            mRapidlyPressing = true;
+            mTmpValue = mValue;
+        }
+        mHandler.postDelayed(mRapidPressTimeout, RAPID_PRESS_TIMEOUT);
+
+        if (v == mBtnPlus && ((mTmpValue+mInterval) <= mMaximum)) {
+            mTmpValue += mInterval;
+        } else if (v == mBtnMinus && ((mTmpValue-mInterval) >= mMinimum)) {
+            mTmpValue -= mInterval;
+        }
+
+        mBar.setProgress(mTmpValue - mMinimum);
+        setMonitorBoxText(mTmpValue);
     }
 }
